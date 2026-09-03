@@ -22,6 +22,14 @@ class ConfigAndLauncherTests(unittest.TestCase):
             actual = store.load()
             self.assertEqual(actual.to_dict(), expected.to_dict())
 
+    def test_auto_refresh_defaults_to_sixty_seconds(self) -> None:
+        config = AppConfig.from_dict({})
+        self.assertEqual(config.auto_refresh_seconds, 60)
+
+    def test_negative_auto_refresh_is_clamped_to_disabled(self) -> None:
+        config = AppConfig.from_dict({"auto_refresh_seconds": -5})
+        self.assertEqual(config.auto_refresh_seconds, 0)
+
     def test_builds_nukex_command_without_shell_string(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

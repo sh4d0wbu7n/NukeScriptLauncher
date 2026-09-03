@@ -35,7 +35,9 @@ Z:\production\01_projects\grenzgaenger\work\SC0001\S0391\_OUT\PREVIEW\grenzgaeng
 - Only the selected project is scanned, using a background worker.
 - Nuke scripts and QuickTime previews are presented on separate tabs.
 - The current version is determined by the highest numeric `_v###` suffix.
+- Current script and preview versions are compared in the STATUS column.
 - Older script and preview versions can be revealed independently.
+- The selected project refreshes automatically every 60 seconds by default.
 - Live search covers project, scene, shot, filename, and version.
 - Scripts can be launched in either Nuke or NukeX.
 - MOV previews open in the default Windows video application.
@@ -53,6 +55,7 @@ Z:\production\01_projects\grenzgaenger\work\SC0001\S0391\_OUT\PREVIEW\grenzgaeng
   "base_path": "\\\\192.168.70.10\\BackupKI\\production\\01_projects",
   "nuke_executable": "C:\\Program Files\\Nuke14.0v5\\Nuke14.0.exe",
   "default_launch_mode": "NukeX",
+  "auto_refresh_seconds": 60,
   "launch_modes": {
     "Nuke": [],
     "NukeX": ["--nukex"]
@@ -60,7 +63,17 @@ Z:\production\01_projects\grenzgaenger\work\SC0001\S0391\_OUT\PREVIEW\grenzgaeng
 }
 ```
 
-The same values can be changed through **Settings**. To move to another Nuke release, change only `nuke_executable`.
+The same values can be changed through **Settings**. To move to another Nuke release, change only `nuke_executable`. Set `auto_refresh_seconds` to `0` to disable automatic refresh.
+
+## Version status
+
+The STATUS column compares assets with the same project, scene, shot, and base filename:
+
+- `IN SYNC`: current script and preview have the same version.
+- `MISMATCH · Preview v003`: the current script has a different preview version.
+- `MISMATCH · Script v002`: the current preview has a different script version.
+- `NO PREVIEW` or `NO SCRIPT`: the counterpart does not exist.
+- `NO VERSION`: the filename does not contain a recognized version number.
 
 ## Build the portable Windows version
 

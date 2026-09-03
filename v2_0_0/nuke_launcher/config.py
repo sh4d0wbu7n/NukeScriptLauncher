@@ -23,6 +23,7 @@ class AppConfig:
     base_path: str = DEFAULT_BASE_PATH
     nuke_executable: str = DEFAULT_NUKE_EXECUTABLE
     default_launch_mode: str = "NukeX"
+    auto_refresh_seconds: int = 60
     launch_modes: dict[str, list[str]] = field(
         default_factory=lambda: {"Nuke": [], "NukeX": ["--nukex"]}
     )
@@ -42,11 +43,16 @@ class AppConfig:
         default_mode = str(data.get("default_launch_mode", "NukeX"))
         if default_mode not in cleaned_modes:
             default_mode = next(iter(cleaned_modes))
+        try:
+            auto_refresh_seconds = max(0, int(data.get("auto_refresh_seconds", 60)))
+        except (TypeError, ValueError):
+            auto_refresh_seconds = 60
 
         return cls(
             base_path=str(data.get("base_path", DEFAULT_BASE_PATH)),
             nuke_executable=str(data.get("nuke_executable", DEFAULT_NUKE_EXECUTABLE)),
             default_launch_mode=default_mode,
+            auto_refresh_seconds=auto_refresh_seconds,
             launch_modes=cleaned_modes,
         )
 
@@ -55,6 +61,7 @@ class AppConfig:
             "base_path": self.base_path,
             "nuke_executable": self.nuke_executable,
             "default_launch_mode": self.default_launch_mode,
+            "auto_refresh_seconds": self.auto_refresh_seconds,
             "launch_modes": self.launch_modes,
         }
 
@@ -72,6 +79,8 @@ class AppConfig:
 
         if self.default_launch_mode not in self.launch_modes:
             errors.append("The default launch mode is not defined.")
+        if self.auto_refresh_seconds < 0:
+            errors.append("The auto-refresh interval cannot be negative.")
         return errors
 
 

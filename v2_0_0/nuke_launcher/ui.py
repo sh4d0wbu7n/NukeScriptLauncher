@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QSplitter,
+    QSpinBox,
     QStyle,
     QTabWidget,
     QTreeWidget,
@@ -37,6 +38,7 @@ from .config import AppConfig, ConfigStore
 from .launcher import launch_nuke, open_media, reveal_in_file_manager
 from .models import PreviewGroup, PreviewVersion, ScanResult, ScriptGroup, ScriptVersion
 from .scanner import ProjectScanner
+from .sync_status import SyncStatus, asset_key, compare_versions
 
 
 APP_STYLE = """
@@ -180,6 +182,11 @@ class SettingsDialog(QDialog):
         self.mode_combo = QComboBox()
         self.mode_combo.addItems(config.launch_modes.keys())
         self.mode_combo.setCurrentText(config.default_launch_mode)
+        self.refresh_spin = QSpinBox()
+        self.refresh_spin.setRange(0, 3600)
+        self.refresh_spin.setSuffix(" seconds")
+        self.refresh_spin.setSpecialValueText("Disabled")
+        self.refresh_spin.setValue(config.auto_refresh_seconds)
 
         base_row = self._path_row(self.base_edit, self._browse_base)
         nuke_row = self._path_row(self.nuke_edit, self._browse_nuke)
@@ -187,7 +194,8 @@ class SettingsDialog(QDialog):
         note = QLabel(
             "The base folder must point directly to 01_projects. The launcher expects "
             "<Project>\\work\\<Scene>\\<Shot>\\comp for scripts and "
-            "<Project>\\work\\<Scene>\\<Shot>\\_OUT\\PREVIEW for QuickTime previews."
+                "<Project>\\work\\<Scene>\\<Shot>\\_OUT\\PREVIEW\\<VersionFolder> "
+                "for QuickTime previews."
         )
         note.setObjectName("Muted")
         note.setWordWrap(True)
@@ -199,6 +207,7 @@ class SettingsDialog(QDialog):
         form.addRow("Base (01_projects)", base_row)
         form.addRow("Nuke executable", nuke_row)
         form.addRow("Default launch mode", self.mode_combo)
+        form.addRow("Auto-refresh interval", self.refresh_spin)
 
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel
@@ -254,6 +263,7 @@ class SettingsDialog(QDialog):
             base_path=self.base_edit.text().strip(),
             nuke_executable=self.nuke_edit.text().strip(),
             default_launch_mode=self.mode_combo.currentText(),
+            auto_refresh_seconds=self.refresh_spin.value(),
             launch_modes=self._launch_modes,
         )
 
@@ -270,6 +280,8 @@ class MainWindow(QMainWindow):
         self._workers: set[QObject] = set()
         self._current_project = ""
         self._current_result: ScanResult | None = None
+        self._latest_scripts: dict[tuple[str, str, str], ScriptVersion] = {}
+        self._latest_previews: dict[tuple[str, str, str], PreviewVersion] = {}
         self._config_error = ""
 
         try:
@@ -282,6 +294,8 @@ class MainWindow(QMainWindow):
         self.setMinimumSize(1080, 650)
         self.resize(1440, 820)
         self._build_ui()
+        self.auto_refresh_timer = QTimer(self)
+        self.auto_refresh_timer.timeout.connect(self._auto_refresh)
         self._apply_config_to_ui()
         QTimer.singleShot(0, self.reload_projects)
         if self._config_error:
@@ -455,7 +469,17 @@ class MainWindow(QMainWindow):
         self.mode_combo.addItems(self.config.launch_modes.keys())
         self.mode_combo.setCurrentText(self.config.default_launch_mode)
         self.mode_combo.blockSignals(False)
+        self._configure_auto_refresh()
         self._update_status()
+
+    def _configure_auto_refresh(self) -> None:
+        self.auto_refresh_timer.stop()
+        if self.config.auto_refresh_seconds > 0:
+            self.auto_refresh_timer.start(self.config.auto_refresh_seconds * 1000)
+
+    def _auto_refresh(self) -> None:
+        if self._current_project and self.refresh_button.isEnabled():
+            self._scan_project(self._current_project)
 
     def _update_status(self, message: str | None = None, success: bool = False) -> None:
         if message is None:
@@ -467,7 +491,14 @@ class MainWindow(QMainWindow):
         self.status_message.style().unpolish(self.status_message)
         self.status_message.style().polish(self.status_message)
         exe_name = Path(self.config.nuke_executable).stem or "Nuke not configured"
-        self.status_nuke.setText(f"{exe_name}  •  {self.mode_combo.currentText()}")
+        refresh_text = (
+            f"refresh {self.config.auto_refresh_seconds}s"
+            if self.config.auto_refresh_seconds > 0
+            else "refresh off"
+        )
+        self.status_nuke.setText(
+            f"{exe_name}  •  {self.mode_combo.currentText()}  •  {refresh_text}"
+        )
 
     def _show_config_error(self, message: str) -> None:
         QMessageBox.warning(self, "Invalid configuration", f"{message}\n\nPlease check Settings.")
@@ -574,6 +605,7 @@ class MainWindow(QMainWindow):
         if result.project == self._current_project:
             self._display_result(result, cached=False)
             self._update_status("Project path available", success=True)
+            self._configure_auto_refresh()
 
     def _scan_failed(self, project: str, message: str) -> None:
         if project == self._current_project:
@@ -583,6 +615,14 @@ class MainWindow(QMainWindow):
 
     def _display_result(self, result: ScanResult, cached: bool) -> None:
         self._current_result = result
+        self._latest_scripts = {
+            asset_key(group.scene, group.shot, group.base_name): group.latest
+            for group in result.groups
+        }
+        self._latest_previews = {
+            asset_key(group.scene, group.shot, group.base_name): group.latest
+            for group in result.preview_groups
+        }
         self.script_tree.setUpdatesEnabled(False)
         self.preview_tree.setUpdatesEnabled(False)
         self.script_tree.clear()
@@ -606,11 +646,19 @@ class MainWindow(QMainWindow):
 
     def _add_script_group(self, group: ScriptGroup) -> None:
         latest = group.latest
-        item = self._make_script_item(latest, status="CURRENT" if latest.is_versioned else "NO VERSION")
+        key = asset_key(group.scene, group.shot, group.base_name)
+        preview = self._latest_previews.get(key)
+        status = compare_versions(
+            latest.version,
+            preview.version if preview else None,
+            "Preview",
+            preview is not None,
+        )
+        item = self._make_script_item(latest, status=status)
         self.script_tree.addTopLevelItem(item)
         self._attach_script_actions(item, latest)
         for older in group.older:
-            child = self._make_script_item(older, status="OLDER", older=True)
+            child = self._make_script_item(older, status=SyncStatus("OLDER", "muted"), older=True)
             item.addChild(child)
             self._attach_script_actions(child, older)
             child.setHidden(not self.script_older_button.isChecked())
@@ -619,18 +667,28 @@ class MainWindow(QMainWindow):
 
     def _add_preview_group(self, group: PreviewGroup) -> None:
         latest = group.latest
-        item = self._make_preview_item(latest, status="CURRENT" if latest.is_versioned else "NO VERSION")
+        key = asset_key(group.scene, group.shot, group.base_name)
+        script = self._latest_scripts.get(key)
+        status = compare_versions(
+            latest.version,
+            script.version if script else None,
+            "Script",
+            script is not None,
+        )
+        item = self._make_preview_item(latest, status=status)
         self.preview_tree.addTopLevelItem(item)
         self._attach_preview_actions(item, latest)
         for older in group.older:
-            child = self._make_preview_item(older, status="OLDER", older=True)
+            child = self._make_preview_item(older, status=SyncStatus("OLDER", "muted"), older=True)
             item.addChild(child)
             self._attach_preview_actions(child, older)
             child.setHidden(not self.preview_older_button.isChecked())
         if group.older:
             item.setExpanded(self.preview_older_button.isChecked())
 
-    def _make_script_item(self, script: ScriptVersion, status: str, older: bool = False) -> QTreeWidgetItem:
+    def _make_script_item(
+        self, script: ScriptVersion, status: SyncStatus, older: bool = False
+    ) -> QTreeWidgetItem:
         first_column = "Older version" if older else f"{script.scene} / {script.shot}"
         item = QTreeWidgetItem(
             [
@@ -638,7 +696,7 @@ class MainWindow(QMainWindow):
                 script.base_name,
                 script.version_label,
                 self._format_date(script.modified_at),
-                status,
+                status.text,
                 "",
             ]
         )
@@ -652,7 +710,7 @@ class MainWindow(QMainWindow):
         return item
 
     def _make_preview_item(
-        self, preview: PreviewVersion, status: str, older: bool = False
+        self, preview: PreviewVersion, status: SyncStatus, older: bool = False
     ) -> QTreeWidgetItem:
         first_column = "Older version" if older else f"{preview.scene} / {preview.shot}"
         item = QTreeWidgetItem(
@@ -661,7 +719,7 @@ class MainWindow(QMainWindow):
                 preview.base_name,
                 preview.version_label,
                 self._format_date(preview.modified_at),
-                status,
+                status.text,
                 "",
             ]
         )
@@ -682,14 +740,14 @@ class MainWindow(QMainWindow):
         return item
 
     @staticmethod
-    def _apply_version_style(item: QTreeWidgetItem, status: str) -> None:
-        if status == "CURRENT":
+    def _apply_version_style(item: QTreeWidgetItem, status: SyncStatus) -> None:
+        if status.level == "ok":
             item.setForeground(2, QColor("#7dcc70"))
             item.setForeground(4, QColor("#7dcc70"))
             font = QFont(item.font(4))
             font.setBold(True)
             item.setFont(4, font)
-        elif status == "NO VERSION":
+        elif status.level == "warning":
             item.setForeground(4, QColor("#e7b45b"))
         else:
             for column in range(5):

@@ -60,7 +60,9 @@ class UiSmokeTests(unittest.TestCase):
             self.assertEqual(window.preview_tree.topLevelItemCount(), 1)
             preview_top = window.preview_tree.topLevelItem(0)
             self.assertEqual(preview_top.text(2), "v003")
+            self.assertEqual(preview_top.text(4), "MISMATCH · Script v002")
             self.assertEqual(preview_top.childCount(), 1)
+            self.assertEqual(window.auto_refresh_timer.interval(), 60_000)
             window.close()
 
 

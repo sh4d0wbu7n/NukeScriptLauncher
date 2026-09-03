@@ -2,6 +2,7 @@
   "base_path": "\\\\192.168.70.10\\BackupKI\\production\\01_projects",
   "nuke_executable": "C:\\Program Files\\Nuke14.0v5\\Nuke14.0.exe",
   "default_launch_mode": "NukeX",
+  "auto_refresh_seconds": 60,
   "launch_modes": {
     "Nuke": [],
     "NukeX": [
